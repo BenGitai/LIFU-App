@@ -1,0 +1,13 @@
+# Core (CPU) -- geometry, figures, web app
+flask
+numpy
+scipy
+matplotlib
+nibabel
+trimesh
+k-wave-python
+
+# GPU simulation (step 10) also needs CuPy built for YOUR CUDA version, e.g.:
+#   pip install "cupy-cuda12x[ctk]"     # CUDA 12.x / 13.x drivers
+#   pip install "cupy-cuda11x[ctk]"     # CUDA 11.x drivers
+# (the [ctk] extra pulls the NVRTC compiler + headers CuPy needs to run kernels)
