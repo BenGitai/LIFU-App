@@ -13,7 +13,8 @@ the target + transducer placement, then run the k-Wave sim and get the charts
 Runs the sim on the local GPU, so start it on the machine with the GPU.
 Outputs go to <folder>/pipeline_out.
 """
-import os, sys, csv, glob, uuid, threading, subprocess, webbrowser
+import os, sys, csv, re, glob, uuid, threading, subprocess, webbrowser
+import numpy as np, nibabel as nib
 from flask import Flask, request, jsonify, send_from_directory, Response
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -27,26 +28,47 @@ REQUIRED = ["ct", "mri", "skull", "brain", "subcort", "cort", "adapter", "base"]
 
 
 def find_csv(folder, atlas):
-    key = "subcort" if atlas == "subcortical" else "cort"
     cands = glob.glob(os.path.join(folder, "*.csv"))
-    hit = [c for c in cands if key in os.path.basename(c).lower()
-           and (atlas == "cortical" and "subcort" not in os.path.basename(c).lower() or atlas == "subcortical")]
-    return hit[0] if hit else None
+    key = "subcort" if atlas == "subcortical" else "cort"
+
+    def ok(c):
+        n = os.path.basename(c).lower()
+        return key in n and (atlas == "subcortical" or "subcort" not in n)
+
+    hits = [c for c in cands if ok(c)]
+    if hits:
+        return hits[0]
+    for c in cands:                       # fallback: any CSV that parses to labels
+        if parse_labels(c):
+            return c
+    return None
+
+
+_NL = re.compile(r"^\s*(-?\d+)\s*:\s*(.+?)\s*$")   # "91: subthalamic_nucleus (STh)"
 
 
 def parse_labels(path):
-    out = []
+    """Handle both a plain 'number,name' CSV and a hierarchical atlas whose cells are
+    'N: name (abbr)' across Level columns. Returns unique [{'num','name'}]."""
+    out = {}
     if not path or not os.path.exists(path):
-        return out
+        return []
     with open(path, newline="", encoding="utf-8", errors="ignore") as f:
         for row in csv.reader(f):
-            nums = [c for c in row if c.strip().lstrip("-").isdigit()]
-            if not nums:
+            hit = False
+            for cell in row:                        # format A: "N: name" inside cells
+                m = _NL.match(cell)
+                if m:
+                    out.setdefault(int(m.group(1)), m.group(2).strip()); hit = True
+            if hit:
                 continue
-            names = [c.strip() for c in row if c.strip() and not c.strip().lstrip("-").isdigit()]
-            out.append({"num": int(nums[0]), "name": max(names, key=len) if names else str(int(nums[0]))})
-    out.sort(key=lambda r: r["name"].lower())
-    return out
+            nums = [c for c in row if c.strip().lstrip("-").isdigit()]   # format B: number + name cols
+            if nums:
+                names = [c.strip() for c in row if c.strip() and not c.strip().lstrip("-").isdigit()]
+                out.setdefault(int(nums[0]), max(names, key=len) if names else str(int(nums[0])))
+    rows = [{"num": k, "name": v} for k, v in out.items()]
+    rows.sort(key=lambda r: r["name"].lower())
+    return rows
 
 
 @app.route("/")
@@ -72,9 +94,19 @@ def scan():
 
 @app.route("/labels")
 def labels():
-    if not STATE.get("data"):
+    folder = STATE.get("data")
+    if not folder:
         return jsonify([])
-    return jsonify(parse_labels(find_csv(STATE["data"], request.args.get("atlas", "subcortical"))))
+    atlas = request.args.get("atlas", "subcortical")
+    rows = parse_labels(find_csv(folder, atlas))
+    path = resolve_files(folder).get("subcort" if atlas == "subcortical" else "cort")   # keep only present labels
+    if path and rows:
+        try:
+            present = set(int(v) for v in np.unique(np.asarray(nib.load(path).dataobj)) if v > 0)
+            rows = [r for r in rows if r["num"] in present] or rows
+        except Exception:
+            pass
+    return jsonify(rows)
 
 
 def _cmd(extra):
@@ -164,8 +196,9 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>LIFU planner<
  <div class="row">
   <label>Atlas <select id="atlas"><option value="subcortical">subcortical</option><option value="cortical">cortical</option></select></label>
   <label style="flex:1;min-width:260px">Target
-   <input id="search" type="text" placeholder="type a name or number to filter…" list="labellist" style="width:100%">
-   <datalist id="labellist"></datalist></label>
+   <input id="search" type="text" placeholder="type a brain-region name or label number…" list="labellist" style="width:100%">
+   <datalist id="labellist"></datalist>
+   <span class="muted" id="matchinfo"></span></label>
   <label>Sim voxel (mm) <input id="dx" type="number" value="0.4" step="0.05" min="0.2" style="width:80px"></label>
   <label>GPU VRAM (GB) <input id="lease" type="number" value="7" step="1" min="2" style="width:70px"></label>
  </div>
@@ -226,9 +259,16 @@ async function loadLabels(){
  const dl=$("labellist");dl.innerHTML="";
  rows.forEach(x=>{const o=document.createElement("option");o.value=x.name+"  [#"+x.num+"]";dl.appendChild(o);});
  $("search").dataset.rows=JSON.stringify(rows);
- $("search").placeholder=rows.length?"type a name or number…":"no label CSV found — type a label number";
+ $("matchinfo").innerHTML=rows.length?('<span style="color:#28ff9b">'+rows.length+' regions loaded — type a name (autocompletes) or a label number</span>')
+   :'<span style="color:#ffca7a">no label CSV found for this atlas — enter a label number</span>';
+ showMatch();
 }
 $("atlas").onchange=loadLabels;
+function showMatch(){const c=chosen();const v=$("search").value.trim();
+ if(!v)return;
+ $("matchinfo").innerHTML=c?('→ <b style="color:#28ff9b">'+(c.name||("label "+c.label))+'</b>  (label '+c.label+')')
+   :'<span style="color:#ff7a90">no matching region — keep typing or use a number</span>';}
+document.getElementById("search").addEventListener("input",showMatch);
 
 function chosen(){
  const v=$("search").value.trim();const rows=JSON.parse($("search").dataset.rows||"[]");
