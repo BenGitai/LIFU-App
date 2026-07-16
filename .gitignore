@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# App working dirs & pipeline outputs
+app_workspace/
+pipeline_out/
+pipeline_out_*/
+*.log
+
+# Subject data & generated artifacts (do NOT commit scans / results)
+*.nii
+*.nii.gz
+*.STEP
+*.step
+*.stl
+*.STL
+*labels.csv
+*.npy
+*.npz
+*.png
+*.html
+
+# OS
+Thumbs.db
+.DS_Store

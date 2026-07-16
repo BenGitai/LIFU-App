@@ -1,0 +1,20 @@
+# Create the environment with:
+#   conda env create -f environment.yml
+#   conda activate lifu
+# Then, for the GPU sim, install the CuPy build matching your CUDA (see README).
+name: lifu
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy
+  - scipy
+  - matplotlib
+  - nibabel
+  - trimesh
+  - networkx
+  - pip
+  - pip:
+      - flask
+      - k-wave-python
+      # - "cupy-cuda12x[ctk]"   # uncomment + match your CUDA to enable the GPU simulation
